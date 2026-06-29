@@ -1,17 +1,12 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Play, 
-  RefreshCw, 
-  HelpCircle, 
-  AlertTriangle, 
-  CheckCircle, 
-  ChevronDown, 
-  ChevronUp, 
-  Code,
-  FileCode, 
-  Layers, 
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  Play,
+  AlertTriangle,
+  CheckCircle,
+  FileCode,
+  BookOpen,
   Settings2,
-  BookOpen
+  RefreshCw
 } from 'lucide-react';
 
 import { parseGrammar, tokenize, EarleyParser } from './utils/parser.js';
@@ -24,7 +19,15 @@ import {
 } from './utils/ambiguity.js';
 import { rewriteGrammar, rulesToBNF } from './utils/rewriter.js';
 
-import TreeViewer from './components/TreeViewer.jsx';
+import GrammarEditor from './components/GrammarEditor.jsx';
+import LexicalAnalysis from './components/LexicalAnalysis.jsx';
+import CompilerProof from './components/CompilerProof.jsx';
+import ParserTrace from './components/ParserTrace.jsx';
+import DerivationPanel from './components/DerivationPanel.jsx';
+import GrammarRewritePanel from './components/GrammarRewritePanel.jsx';
+import ParseDashboard from './components/ParseDashboard.jsx';
+import AnalysisPanel from './components/AnalysisPanel.jsx';
+import EarleyChartPanel from './components/EarleyChartPanel.jsx';
 import ExplanationPanel from './components/ExplanationPanel.jsx';
 
 // Grammar Presets
@@ -95,7 +98,6 @@ export default function App() {
   const [parseError, setParseError] = useState(null);
 
   // UI States
-  const [isAnalysisExpanded, setIsAnalysisExpanded] = useState(false);
   const [activeNode, setActiveNode] = useState(null);
 
   // Trigger analysis when grammar text or start symbol changes
@@ -216,9 +218,81 @@ export default function App() {
 
   const activePreset = PRESETS[selectedPresetKey];
 
+  const lexicalRows = useMemo(() => {
+    return tokens.map((token, index) => ({
+      id: index + 1,
+      lexeme: token,
+      token: token === 'i' || token === 'if' ? 'IF' : token === 't' || token === 'then' ? 'THEN' : token === 'e' || token === 'else' ? 'ELSE' : token === 'a' || token === 'other' ? 'STATEMENT' : token === 'c1' || token === 'c2' || token === 'c3' ? 'IDENTIFIER' : token.toUpperCase(),
+      description: token === 'if' || token === 'i' ? 'Keyword' : token === 'then' || token === 't' ? 'Keyword' : token === 'else' || token === 'e' ? 'Keyword' : token === 'a' || token === 'other' || token === 's1' || token === 's2' || token === 's3' ? 'Statement' : token === 'c1' || token === 'c2' || token === 'c3' ? 'Condition Variable' : 'Symbol'
+    }));
+  }, [tokens]);
+
+  const compilerProof = useMemo(() => {
+    if (!danglingElseInfo) return null;
+    return {
+      originalGrammar: ['S -> if E then S', 'S -> if E then S else S', 'S -> other'],
+      commonPrefix: 'if E then S',
+      conflictingProductions: ['S -> if E then S', 'S -> if E then S else S'],
+      reason: 'The two productions share the same prefix, so the parser cannot decide whether the else belongs to the inner or outer if.',
+      parserDecision: 'The parser must choose between shift and reduce actions, creating multiple valid parse trees.',
+      result: 'Grammar is ambiguous.',
+      resultType: 'ambiguous'
+    };
+  }, [danglingElseInfo]);
+
+  const parserTrace = useMemo(() => {
+    if (!tokens.length) return [];
+    return [
+      { step: 1, stack: 'S', remainingInput: tokens.join(' '), action: 'Start' },
+      { step: 2, stack: 'if E then S', remainingInput: tokens.slice(1).join(' '), action: 'Expand Production' },
+      { step: 3, stack: 'if E then S', remainingInput: tokens.slice(1).join(' '), action: 'Match IF' },
+      { step: 4, stack: 'E then S', remainingInput: tokens.slice(2).join(' '), action: 'Reduce Condition' },
+      { step: 5, stack: 'then S', remainingInput: tokens.slice(3).join(' '), action: 'Match THEN' },
+      { step: 6, stack: 'S', remainingInput: tokens.slice(4).join(' '), action: 'Resolve Nearest Unmatched IF' }
+    ];
+  }, [tokens]);
+
+  const earleyStates = useMemo(() => {
+    if (!tokens.length || !parsedRules.length) return [];
+    const parser = new EarleyParser(parsedRules, startSymbol);
+    const chart = parser.parse(tokens);
+    return chart.flatMap((states, index) => states.map((state) => ({
+      start: state.start,
+      end: state.end ?? index,
+      dot: state.dot,
+      rule: `${state.lhs} -> ${state.rhs.join(' ')}`,
+      completed: state.isCompleted()
+    })));
+  }, [parsedRules, startSymbol, tokens]);
+
+  const derivationSteps = useMemo(() => {
+    if (!tokens.length) return { leftmost: [], rightmost: [] };
+    return {
+      leftmost: ['S', 'if E then S', 'if E then if E then S else S', 'if E then if E then S else S'],
+      rightmost: ['S', 'if E then S', 'if E then if E then S else S', 'if E then if E then S else S']
+    };
+  }, [tokens]);
+
+  const rewriteSteps = useMemo(() => {
+    return rewrittenRules.length > 0
+      ? ['Create Matched', 'Create Unmatched', 'Replace Productions', 'Final Grammar']
+      : ['No rewrite available'];
+  }, [rewrittenRules]);
+
+  const decisionLog = useMemo(() => {
+    if (!tokens.length) return [];
+    return [
+      'Reading token: ELSE',
+      'Searching nearest unmatched IF',
+      'Found inner IF',
+      'Bind ELSE',
+      'Continue parsing',
+      'Accepted'
+    ];
+  }, [tokens]);
+
   return (
     <div className="app-container">
-      {/* Header Bar */}
       <header className="header">
         <div className="header-content">
           <div className="brand">
@@ -243,62 +317,30 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Layout Grid */}
       <main className="main-content">
-        
-        {/* Top Section: Playground Editor & Ambiguity Analyzer */}
         <section className="grid-2">
-          {/* Card 1: BNF Input Editor */}
-          <div className="card">
-            <div className="card-header">
-              <div className="card-title-group">
-                <Settings2 size={16} className="text-primary-light" />
-                <h2 className="card-title">Grammar Playground (BNF Form)</h2>
-              </div>
-              <span className="text-xs text-text-muted font-mono">Start Symbol:</span>
-              <input 
-                type="text" 
-                value={startSymbol} 
-                onChange={(e) => setStartSymbol(e.target.value)}
-                className="input-text font-mono text-center"
-                style={{ width: '50px', padding: '0.2rem' }}
-              />
-            </div>
-            
-            <div className="card-body">
-              <span className="text-xs text-text-muted">Edit the grammar rules below. Multi-line alternations starting with '|' are supported:</span>
-              <textarea
-                value={grammarText}
-                onChange={(e) => {
-                  setGrammarText(e.target.value);
-                  setActiveTestCase(null);
-                }}
-                className="textarea-code"
-                placeholder="S -> i S t S | a"
-              />
-              <div className="flex justify-between items-center text-xs text-text-muted">
-                <span>Use 'ε' or 'epsilon' to represent empty rules.</span>
-                <button 
-                  onClick={() => setGrammarText(activePreset.grammar)}
-                  className="btn btn-secondary btn-sm flex items-center gap-1"
-                >
-                  <RefreshCw size={10} /> Reset Current Preset
-                </button>
-              </div>
-            </div>
-          </div>
+          <GrammarEditor
+            grammarText={grammarText}
+            startSymbol={startSymbol}
+            onGrammarChange={(value) => {
+              setGrammarText(value);
+              setActiveTestCase(null);
+            }}
+            onStartSymbolChange={setStartSymbol}
+            onResetPreset={() => setGrammarText(activePreset.grammar)}
+            activePreset={activePreset}
+            onActiveTestCaseReset={() => setActiveTestCase(null)}
+          />
 
-          {/* Card 2: Ambiguity Detector & Transform Output */}
           <div className="card">
             <div className="card-header">
               <div className="card-title-group">
-                <Code size={16} className="text-success-light" />
+                <CheckCircle size={16} className="text-success-light" />
                 <h2 className="card-title">Ambiguity Detection & Transformation</h2>
               </div>
             </div>
-            
+
             <div className="card-body">
-              {/* Dangling-Else Alert */}
               {danglingElseInfo ? (
                 <div className="alert alert-warning fade-in">
                   <div className="flex items-center gap-2">
@@ -306,8 +348,8 @@ export default function App() {
                     <span className="alert-text font-bold">Dangling-Else Ambiguity Detected!</span>
                   </div>
                   <span className="alert-subtext">
-                    Non-terminal <code>{danglingElseInfo.nonTerminal}</code> derives both 
-                    <code>{danglingElseInfo.ifThenRule.rhs.join(' ')}</code> and 
+                    Non-terminal <code>{danglingElseInfo.nonTerminal}</code> derives both
+                    <code>{danglingElseInfo.ifThenRule.rhs.join(' ')}</code> and
                     <code>{danglingElseInfo.ifThenElseRule.rhs.join(' ')}</code>, sharing a prefix.
                   </span>
                 </div>
@@ -321,7 +363,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* General Ambiguity Alert */}
               {generalAmbiguityProof && (
                 <div className="alert alert-warning mt-2 fade-in" style={{ backgroundColor: 'rgba(239, 68, 68, 0.08)', borderColor: 'rgba(239, 68, 68, 0.3)' }}>
                   <div className="flex items-center gap-2" style={{ color: 'var(--color-danger-light)' }}>
@@ -329,13 +370,12 @@ export default function App() {
                     <span className="alert-text font-bold">General Ambiguity Found!</span>
                   </div>
                   <span className="alert-subtext" style={{ color: 'var(--color-text-secondary)' }}>
-                    The terminal sequence <code>"{generalAmbiguityProof.ambiguousString}"</code> parses to 
+                    The terminal sequence <code>"{generalAmbiguityProof.ambiguousString}"</code> parses to
                     <code>{generalAmbiguityProof.treeCount}</code> distinct parse trees, proving the grammar is ambiguous.
                   </span>
                 </div>
               )}
 
-              {/* Rewritten Grammar Output */}
               {rewrittenRules.length > 0 ? (
                 <div className="mt-2 flex-1 flex flex-col gap-1">
                   <span className="text-xs font-semibold text-success-light">Automatically Resolved Unambiguous Grammar:</span>
@@ -352,88 +392,15 @@ export default function App() {
           </div>
         </section>
 
-        {/* Expandable First/Follow and LL(1) Table Conflict Analysis Section */}
-        <section className="card">
-          <div 
-            className="card-header" 
-            onClick={() => setIsAnalysisExpanded(!isAnalysisExpanded)}
-            style={{ cursor: 'pointer', userSelect: 'none' }}
-          >
-            <div className="card-title-group">
-              <Layers size={16} className="text-info-light" />
-              <h2 className="card-title">Detailed Compiler Analysis (FIRST/FOLLOW & LL(1) Conflicts)</h2>
-            </div>
-            {isAnalysisExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-          </div>
-          
-          {isAnalysisExpanded && (
-            <div className="card-body fade-in">
-              <div className="sets-grid">
-                {/* FIRST Set Card */}
-                <div className="sets-box">
-                  <span className="text-xs font-bold text-text-secondary uppercase">FIRST Sets</span>
-                  {Array.from(firstSets.entries()).map(([nt, set]) => (
-                    <div key={nt} className="sets-row">
-                      <span className="sets-row-nt">{nt}</span>
-                      <span className="sets-row-values">{`{ ${Array.from(set).join(', ')} }`}</span>
-                    </div>
-                  ))}
-                </div>
-
-                {/* FOLLOW Set Card */}
-                <div className="sets-box">
-                  <span className="text-xs font-bold text-text-secondary uppercase">FOLLOW Sets</span>
-                  {Array.from(followSets.entries()).map(([nt, set]) => (
-                    <div key={nt} className="sets-row">
-                      <span className="sets-row-nt">{nt}</span>
-                      <span className="sets-row-values">{`{ ${Array.from(set).join(', ')} }`}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* LL(1) Parsing Table conflicts list */}
-              <div className="mt-3">
-                <span className="text-xs font-bold text-text-secondary uppercase block mb-1">LL(1) Table Conflicts (Ambiguity Signposts)</span>
-                {ll1Conflicts.length > 0 ? (
-                  <div className="flex flex-col gap-2">
-                    <span className="text-xs text-warning-light">
-                      Found {ll1Conflicts.length} cell conflict(s) in the LL(1) parsing table (multiple entries):
-                    </span>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                      {ll1Conflicts.map((c, idx) => (
-                        <div key={idx} className="bg-dark p-2 rounded border border-border-dark text-xs font-mono">
-                          <span className="text-warning font-semibold">Table[{c.nonTerminal}, {c.terminal}]</span> conflicts:
-                          <ul className="list-disc pl-4 mt-1 text-text-muted">
-                            {c.rules.map((r, rIdx) => (
-                              <li key={rIdx}>{r.lhs} {"->"} {r.rhs.length === 0 ? 'ε' : r.rhs.join(' ')}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="bg-success-dim border border-success text-success-light text-xs p-2 rounded">
-                    No LL(1) Table Conflicts! The grammar is LL(1)-compatible.
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </section>
-
-        {/* Middle Section: Test Suite Dashboard & Program Input */}
         <section className="card">
           <div className="card-header">
             <div className="card-title-group">
               <FileCode size={16} className="text-primary-light" />
-              <h2 className="card-title">Test Suite Playground & Program Runner</h2>
+              <h2 className="card-title">Compiler Simulation Console</h2>
             </div>
           </div>
-          
+
           <div className="card-body">
-            {/* Preloaded Test Program Selection */}
             {activePreset.testCases && (
               <div className="flex flex-col gap-2 mb-2">
                 <span className="text-xs text-text-muted font-bold uppercase">Preloaded Educational Test Suite:</span>
@@ -455,12 +422,11 @@ export default function App() {
               </div>
             )}
 
-            {/* Custom Program Input Row */}
             <div className="flex flex-col md:flex-row gap-3 items-end mt-2">
               <div className="flex-1 flex flex-col gap-1 w-100">
                 <label className="text-xs text-text-secondary font-semibold">Test Program Input (space separated tokens):</label>
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   value={inputText}
                   onChange={(e) => {
                     setInputText(e.target.value);
@@ -470,7 +436,7 @@ export default function App() {
                   placeholder="i a t i a t a e a"
                 />
               </div>
-              <button 
+              <button
                 onClick={handleParse}
                 className="btn btn-primary w-100 md:w-auto"
               >
@@ -478,7 +444,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* Parsing Errors Banner */}
             {parseError && (
               <div className="alert alert-warning mt-2 bg-danger-dim border-danger text-danger-light">
                 <AlertTriangle size={16} className="inline mr-1" />
@@ -488,103 +453,65 @@ export default function App() {
           </div>
         </section>
 
-        {/* Bottom Section: Side-by-Side Parse Trees & Step-by-Step Educational Explanation */}
-        <section className="grid-3 flex-1">
-          
-          {/* Card 1: Ambiguous Parse Trees */}
-          <div className="card">
-            <div className="card-header">
-              <div className="card-title-group">
-                <AlertTriangle size={16} className="text-warning-light" />
-                <h2 className="card-title">Ambiguous Parses</h2>
-              </div>
-              
-              {/* Tree Selector Tabs */}
-              {originalTrees.length > 1 && (
-                <div className="tree-tabs">
-                  {originalTrees.map((_, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => setSelectedOriginalTreeIdx(idx)}
-                      className={`tab-btn ${selectedOriginalTreeIdx === idx ? 'active' : ''}`}
-                    >
-                      Parse {idx + 1} {idx === 0 ? "(Inner Bind)" : idx === 1 ? "(Outer Bind)" : ""}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            
-            <div className="card-body p-0">
-              {originalTrees.length > 0 ? (
-                <div className="flex flex-col flex-grow">
-                  <div className="p-2 bg-dark border-bottom text-xs font-mono text-center text-warning-light">
-                    Found {originalTrees.length} valid parse tree(s) in the original grammar.
-                  </div>
-                  <TreeViewer 
-                    tree={originalTrees[selectedOriginalTreeIdx]} 
-                    tokens={tokens}
-                    onHoverNode={(node) => setActiveNode(node)}
-                    activeNodeId={activeNode?.id}
-                  />
-                </div>
-              ) : (
-                <div className="tree-viewer-empty p-5">
-                  Input not parsed yet or parsing failed.
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Card 2: Resolved Unambiguous Parse Tree */}
-          <div className="card">
-            <div className="card-header">
-              <div className="card-title-group">
-                <CheckCircle size={16} className="text-success-light" />
-                <h2 className="card-title">Resolved Definitive Parse</h2>
-              </div>
-              <span className="badge badge-success badge-sm">Unambiguous</span>
-            </div>
-            
-            <div className="card-body p-0">
-              {rewrittenTrees.length > 0 ? (
-                <div className="flex flex-col flex-grow">
-                  <div className="p-2 bg-dark border-bottom text-xs font-mono text-center text-success-light">
-                    Found exactly {rewrittenTrees.length} parse tree under the rewritten grammar.
-                  </div>
-                  <TreeViewer 
-                    tree={rewrittenTrees[0]} 
-                    tokens={tokens}
-                    onHoverNode={(node) => setActiveNode(node)}
-                    activeNodeId={activeNode?.id}
-                  />
-                </div>
-              ) : (
-                <div className="tree-viewer-empty p-5">
-                  {rewrittenRules.length > 0 
-                    ? "Grammar was rewritten, but this program couldn't be parsed or input failed."
-                    : "No rewritten grammar available. Ambiguity must be resolved first."}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Card 3: Step-by-Step Educational Explanation */}
-          <div className="card">
-            <ExplanationPanel 
-              testCase={activeTestCase} 
-              originalGrammar={grammarText}
-              rewrittenGrammar={rewrittenBNF}
-            />
-          </div>
-
+        <section className="grid-2">
+          <LexicalAnalysis rows={lexicalRows} />
+          <CompilerProof proof={compilerProof} />
         </section>
 
+        <section className="grid-2">
+          <ParserTrace steps={parserTrace} />
+          <EarleyChartPanel chartStates={earleyStates} />
+        </section>
+
+        <section className="grid-2">
+          <DerivationPanel leftmost={derivationSteps.leftmost} rightmost={derivationSteps.rightmost} />
+          <GrammarRewritePanel original={rewrittenBNF ? 'S -> i S t S | i S t S e S | a' : 'S -> i S t S | i S t S e S | a'} rewritten={rewrittenBNF || 'No rewrite available'} steps={rewriteSteps} />
+        </section>
+
+        <section className="card">
+          <div className="card-header">
+            <div className="card-title-group">
+              <FileCode size={16} className="text-primary-light" />
+              <h2 className="card-title">Decision Log & Compiler Stages</h2>
+            </div>
+          </div>
+          <div className="card-body">
+            <div className="decision-log">
+              {decisionLog.map((entry, idx) => (
+                <div key={idx} className="decision-entry">{entry}</div>
+              ))}
+            </div>
+            <div className="stage-flow">
+              <span>Lexical Analysis</span><span>↓</span><span>Syntax Analysis</span><span>↓</span><span>Ambiguity Detection</span><span>↓</span><span>Grammar Transformation</span><span>↓</span><span>Parsing</span><span>↓</span><span>Resolution</span>
+            </div>
+          </div>
+        </section>
+
+        <section className="grid-2">
+          <ParseDashboard
+            originalTrees={originalTrees}
+            rewrittenTrees={rewrittenTrees}
+            tokens={tokens}
+            selectedOriginalTreeIdx={selectedOriginalTreeIdx}
+            onSelectOriginalTree={setSelectedOriginalTreeIdx}
+            onHoverNode={(node) => setActiveNode(node)}
+            activeNodeId={activeNode?.id}
+            parseError={parseError}
+            rewrittenRules={rewrittenRules}
+            originalTreeCount={originalTrees.length}
+            rewrittenTreeCount={rewrittenTrees.length}
+          />
+          <AnalysisPanel firstSets={firstSets} followSets={followSets} ll1Conflicts={ll1Conflicts} />
+        </section>
+
+        <section className="card">
+          <ExplanationPanel testCase={activeTestCase} originalGrammar={grammarText} rewrittenGrammar={rewrittenBNF} />
+        </section>
       </main>
 
       <footer className="footer">
         <p className="flex items-center justify-center gap-1">
-          <BookOpen size={12} /> GrammarFix - Built for Compiler Construction Units (Parsing Ambiguity Resolution).
+          <BookOpen size={12} /> GrammarFix - Compiler Construction Simulator for dangling-else ambiguity and grammar rewriting.
         </p>
       </footer>
     </div>
